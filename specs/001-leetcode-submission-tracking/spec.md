@@ -17,6 +17,8 @@
 - Q: What should the leaderboard and a member's tracked data show once that member leaves the Discord server? → A: A job MUST be run to wipe that member's registration and solve history data from the datastore entirely (not merely hidden from the leaderboard).
 - Q: When the external LeetCode data source is unavailable for an extended period, should the leaderboard keep showing the last-known data, or should it indicate something is stale/degraded? → A: The bot MUST display an outage/error indicator on the leaderboard when a refresh fails, rather than silently showing stale data.
 - Q: If a registered member's LeetCode profile becomes private after registration, how should the system handle that member going forward? → A: Treat the profile as no longer valid — hide the member from the leaderboard and freeze their score updates until the profile is public again. Additionally, the bot MUST post about this event in a separate, public activity feed channel (distinct from the leaderboard channel).
+- Q: Which external libraries/services will this feature depend on for the Discord bot interface and for retrieving LeetCode solve data? → A: discord.py (https://discordpy.readthedocs.io/en/stable/) for the Discord bot framework, and the LeetCode public GraphQL endpoint (`https://leetcode.com/graphql`) queried directly — per the reverse-engineered, partial schema documented in `docs/leetcode-graphql-schema.graphql` — rather than a third-party wrapper API, for retrieving public profile and submission data.
+- Q: How should the system handle the fact that `https://leetcode.com/graphql` is an undocumented, unofficial endpoint (no auth, no published rate limits, no stability guarantee) when polling many members every ~5-minute refresh cycle? → A: During development, test against the live endpoint to confirm the polling design can comfortably support up to 250 registered members within a refresh cycle. To reduce brittleness against this undocumented endpoint, the ingestion implementation MUST also minimize both the number of distinct GraphQL query operations and the complexity (field selection depth) of each query used against it.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -113,10 +115,13 @@ Community members can see how they and others rank, both for the current day and
 - **SC-003**: 100% of scores displayed on the leaderboard are accurate relative to the defined weighting formula and each member's recorded solve history, verifiable by an organizer at any time.
 - **SC-004**: No solved problem is ever counted more than once toward a member's score.
 - **SC-005**: The daily and weekly leaderboards are visible to all community members at all times without any member needing to run a command or take action to view them.
+- **SC-006**: The polling/ingestion design is validated during development to comfortably support at least 250 registered members completing a full refresh cycle against the live LeetCode GraphQL endpoint without triggering rate-limiting or blocking.
 
 ## Assumptions
 
-- The system retrieves publicly available LeetCode profile data via an external data source outside the community's direct control; extended outages of that source may delay leaderboard updates.
+- The system retrieves publicly available LeetCode profile and submission data by querying LeetCode's own GraphQL endpoint (`https://leetcode.com/graphql`) directly, using the reverse-engineered, partial schema in `docs/leetcode-graphql-schema.graphql`; this endpoint is undocumented and outside the community's direct control, so extended outages, undocumented rate limits, or unannounced schema changes may delay leaderboard updates or require ingestion logic changes.
+- The Discord bot interface is built with discord.py (https://discordpy.readthedocs.io/en/stable/).
+- Because `https://leetcode.com/graphql` is undocumented and unofficial, the ingestion implementation is expected to minimize the number of distinct GraphQL query operations and the field-selection complexity of each query, to reduce exposure to unannounced schema changes or rate-limiting; the 250-member scale target (SC-006) is confirmed by testing against the live endpoint during development rather than by a published capacity guarantee from LeetCode.
 - A "day" and a "week" are each defined relative to a single, community-wide reference timezone rather than each member's local timezone.
 - A "week" begins on a fixed weekday (e.g., Monday) common to all members, forming a calendar-week window rather than a rolling 7-day window.
 - Only problems marked as solved (accepted) on a member's public LeetCode profile are eligible to be recorded; attempted-but-unsolved problems are not tracked.

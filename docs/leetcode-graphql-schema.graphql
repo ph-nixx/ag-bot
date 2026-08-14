@@ -1,0 +1,650 @@
+# LeetCode GraphQL Schema (Reverse-Engineered, Partial)
+#
+# Endpoint:      POST https://leetcode.com/graphql
+# Required header: Referer: https://leetcode.com
+# Auth:          None of the fields below require authentication (public profile data).
+#
+# PROVENANCE
+# This is NOT an official schema — leetcode.com/graphql has introspection disabled
+# (`{ __schema { types { name } } }` returns "Query unavailable"), so there is no
+# spec-sanctioned way to obtain the authoritative SDL. This file was assembled by:
+#   1. Extracting every operation string from alfaarghya/alfa-leetcode-api's
+#      src/GQLQueries/*.ts (https://github.com/alfaarghya/alfa-leetcode-api),
+#      commit as of 2026-08-13.
+#   2. Live-verifying the operations relevant to ALGO GYM (see
+#      specs/001-leetcode-submission-tracking/spec.md) directly against
+#      leetcode.com/graphql on 2026-08-13.
+#   3. Merging duplicate/overlapping field selections (e.g. `question.solution`
+#      is requested shallow in one operation and deep in another — both are the
+#      same field, merged into one type here) and inferring types from live
+#      response payloads where the source repo left them untyped.
+#
+# CONFIDENCE MARKERS
+#   [VERIFIED]  — confirmed live against leetcode.com/graphql on 2026-08-13.
+#   [SOURCED]   — taken from the alfa-leetcode-api operations/types.ts, not
+#                 independently re-verified this session.
+# Field/type presence is a lower bound, not a complete picture: any field never
+# referenced by one of the source operations is simply absent from this file,
+# whether or not it exists on the live schema.
+#
+# KNOWN GAPS
+#   - No mutations. The source project is read-only and never authenticates, so
+#     mutation names/shapes (submit code, run code, etc.) are entirely unknown.
+#   - Input object internals are mostly unknown. `QuestionListFilterInput` is
+#     [VERIFIED] to exist and to reject unknown fields with a descriptive error
+#     ("In field \"x\": Unknown field."), and to require `filters: {}` be passed
+#     explicitly even though the argument is nullable in the operation string —
+#     but no valid field name on it has been confirmed. Treat it as opaque.
+#   - No enum value lists, no deprecation info, no full field lists on any
+#     type — only what these ~20 operations happened to select.
+#
+# INCONSISTENCIES OBSERVED (documented, not resolved)
+#   - Difficulty casing differs by field. `submitStats.acSubmissionNum.difficulty`,
+#     `allQuestionsCount.difficulty`, and `question.difficulty` all [VERIFIED]
+#     return "Easy" | "Medium" | "Hard" | "All" (title case). But
+#     `userProfileUserQuestionProgressV2.numAcceptedQuestions.difficulty`
+#     [VERIFIED] returns "EASY" | "MEDIUM" | "HARD" (upper case, no "All").
+#     Modeled below as two distinct enums — do not assume they're the same type.
+#   - `alfa-leetcode-api`'s own hand-written types.ts declares
+#     `MatchedUser.userCalendar.dccBadge` (singular), but its own
+#     userProfileCalendar.ts operation queries `dccBadges` (plural). This file
+#     follows the operation string (what's actually sent over the wire), not
+#     the possibly-stale hand-written type.
+
+# ============================================================
+# Scalars & Enums
+# ============================================================
+
+"""
+Difficulty as returned by submitStats, allQuestionsCount, and question.difficulty.
+[VERIFIED] values: Easy, Medium, Hard, All (the "All" bucket appears in
+submitStats/allQuestionsCount aggregates, not on individual questions).
+"""
+enum Difficulty {
+  All
+  Easy
+  Medium
+  Hard
+}
+
+"""
+Difficulty as returned by userProfileUserQuestionProgressV2 fields only.
+[VERIFIED] distinct casing from `Difficulty` above — see INCONSISTENCIES.
+"""
+enum DifficultyLevel {
+  EASY
+  MEDIUM
+  HARD
+}
+
+# Many "object-shaped" fields below (stats, metaData, similarQuestions,
+# companyTagStats, envInfo) are [SOURCED] as opaque JSON-encoded strings on
+# the live API rather than real GraphQL object/list types. Kept as `String`.
+
+# ============================================================
+# User Domain
+# ============================================================
+
+"""A single Easy/Medium/Hard/All bucket with submission counts. [VERIFIED]"""
+type SubmissionCountNode {
+  difficulty: Difficulty
+  count: Int
+  submissions: Int
+}
+
+"""[VERIFIED] Aggregate submission stats for a user, in two equivalent shapes
+observed under different field names (`submitStats` vs `submitStatsGlobal`)."""
+type SubmitStatsNode {
+  totalSubmissionNum: [SubmissionCountNode]
+  acSubmissionNum: [SubmissionCountNode]
+}
+
+"""[SOURCED]"""
+type UserDataProfile {
+  realName: String
+  userAvatar: String
+  birthday: String
+  ranking: Int
+  reputation: Int
+  websites: [String]
+  countryName: String
+  company: String
+  school: String
+  skillTags: [String]
+  aboutMe: String
+  starRating: Float
+}
+
+"""[SOURCED]"""
+type Contributions {
+  points: Int
+  questionCount: Int
+  testcaseCount: Int
+}
+
+"""[SOURCED]"""
+type Badge {
+  id: String
+  displayName: String
+  icon: String
+  creationDate: String
+}
+
+"""[SOURCED] Used for `upcomingBadges` — a lighter-weight Badge projection."""
+type UpcomingBadge {
+  name: String
+  icon: String
+}
+
+"""[SOURCED]"""
+type DccBadgeEntry {
+  timestamp: Int
+  badge: UpcomingBadge
+}
+
+"""
+[SOURCED] `submissionCalendar` is a JSON-encoded string mapping unix day
+timestamps to solve counts for that day — not a structured GraphQL type.
+"""
+type UserCalendar {
+  activeYears: [Int]
+  streak: Int
+  totalActiveDays: Int
+  dccBadges: [DccBadgeEntry]
+  submissionCalendar: String
+}
+
+"""[SOURCED]"""
+type SkillStat {
+  tagName: String
+  tagSlug: String
+  problemsSolved: Int
+}
+
+"""[SOURCED]"""
+type TagProblemCounts {
+  fundamental: [SkillStat]
+  intermediate: [SkillStat]
+  advanced: [SkillStat]
+}
+
+"""[SOURCED]"""
+type LanguageProblemCount {
+  languageName: String
+  problemsSolved: Int
+}
+
+"""
+[VERIFIED] Public LeetCode user profile. `matchedUser(username)` returns null
+(with a top-level GraphQL error `"That user does not exist."`) when the
+username has no matching public profile — this is the existence-check signal.
+"""
+type MatchedUser {
+  username: String
+  githubUrl: String
+  twitterUrl: String
+  linkedinUrl: String
+  contributions: Contributions
+  profile: UserDataProfile
+  badges: [Badge]
+  upcomingBadges: [UpcomingBadge]
+  activeBadge: Badge
+  submitStats: SubmitStatsNode
+  submitStatsGlobal: SubmitStatsNode
+  submissionCalendar: String
+  userCalendar(year: Int): UserCalendar
+  tagProblemCounts: TagProblemCounts
+  languageProblemCount: [LanguageProblemCount]
+}
+
+"""[VERIFIED] Shared shape for recentSubmissionList and recentAcSubmissionList."""
+type Submission {
+  title: String
+  titleSlug: String
+  timestamp: String
+  statusDisplay: String
+  lang: String
+}
+
+"""[SOURCED]"""
+type QuestionCount {
+  difficulty: Difficulty
+  count: Int
+}
+
+"""[VERIFIED] Per-difficulty progress buckets. See DifficultyLevel casing note."""
+type DifficultyCount {
+  count: Int
+  difficulty: DifficultyLevel
+}
+
+"""[SOURCED]"""
+type DifficultyPercentage {
+  difficulty: DifficultyLevel
+  percentage: Float
+}
+
+"""[VERIFIED]"""
+type UserQuestionProgress {
+  numAcceptedQuestions: [DifficultyCount]
+  numFailedQuestions: [DifficultyCount]
+  numUntouchedQuestions: [DifficultyCount]
+  userSessionBeatsPercentage: [DifficultyPercentage]
+}
+
+# ============================================================
+# Problem Domain
+# ============================================================
+
+"""[SOURCED]"""
+type Contributor {
+  username: String
+  profileUrl: String
+  avatarUrl: String
+}
+
+"""[SOURCED]"""
+type TopicTag {
+  name: String
+  slug: String
+  translatedName: String
+}
+
+"""[SOURCED]"""
+type CodeSnippet {
+  lang: String
+  langSlug: String
+  code: String
+}
+
+"""[SOURCED]"""
+type ChallengeQuestion {
+  id: String
+  date: String
+  incompleteChallengeCount: Int
+  streakCount: Int
+  type: String
+}
+
+"""[SOURCED]"""
+type SolutionRating {
+  count: Int
+  average: Float
+  userRating: SolutionUserRating
+}
+
+"""[SOURCED]"""
+type SolutionUserRating {
+  score: Int
+}
+
+"""[SOURCED]"""
+type SolutionAuthorProfile {
+  userAvatar: String
+  reputation: Int
+}
+
+"""[SOURCED]"""
+type SolutionAuthor {
+  username: String
+  isActive: Boolean
+  profile: SolutionAuthorProfile
+}
+
+"""[SOURCED]"""
+type SolutionPost {
+  id: String
+  status: String
+  creationDate: Int
+  author: SolutionAuthor
+}
+
+"""[SOURCED]"""
+type SolutionTag {
+  name: String
+  slug: String
+}
+
+"""[SOURCED]"""
+type SolutionTopic {
+  id: String
+  commentCount: Int
+  topLevelCommentCount: Int
+  viewCount: Int
+  subscribed: Boolean
+  solutionTags: [SolutionTag]
+  post: SolutionPost
+}
+
+"""
+[SOURCED] Merged shape: `question.solution` is requested shallow (id,
+canSeeDetail, paidOnly, hasVideoSolution, paidOnlyVideo) in selectProblem.ts /
+dailyProblem.ts, and deep (+ title, content, rating, topic) in
+officialSolution.ts. Same field, different selection sets — not two types.
+"""
+type SolutionDetail {
+  id: String
+  title: String
+  content: String
+  contentTypeId: String
+  paidOnly: Boolean
+  hasVideoSolution: Boolean
+  paidOnlyVideo: Boolean
+  canSeeDetail: Boolean
+  rating: SolutionRating
+  topic: SolutionTopic
+}
+
+"""
+[VERIFIED, partial] Full field list is [SOURCED] from selectProblem.ts /
+dailyProblem.ts. `questionFrontendId`, `title`, `difficulty` confirmed live
+via `question(titleSlug: "two-sum")`; `questionFrontendId` is a String
+("1"), not a numeric type, despite the name.
+"""
+type Question {
+  questionId: String
+  questionFrontendId: String
+  boundTopicId: Int
+  title: String
+  titleSlug: String
+  content: String
+  translatedTitle: String
+  translatedContent: String
+  isPaidOnly: Boolean
+  difficulty: Difficulty
+  likes: Int
+  dislikes: Int
+  isLiked: Boolean
+  similarQuestions: String
+  exampleTestcases: String
+  contributors: [Contributor]
+  topicTags: [TopicTag]
+  companyTagStats: String
+  codeSnippets: [CodeSnippet]
+  stats: String
+  hints: [String]
+  solution: SolutionDetail
+  status: String
+  sampleTestCase: String
+  metaData: String
+  judgerAvailable: Boolean
+  judgeType: String
+  mysqlSchemas: [String]
+  enableRunCode: Boolean
+  enableTestMode: Boolean
+  enableDebugger: Boolean
+  envInfo: String
+  libraryUrl: String
+  adminUrl: String
+  challengeQuestion: ChallengeQuestion
+  note: String
+
+  # Fields below only ever observed via questionList's `data` selection,
+  # not via the standalone `question(titleSlug)` lookup — plausibly present
+  # on both, confirmed only in the list context.
+  acRate: Float
+  freqBar: Float
+  isFavor: Boolean
+  hasSolution: Boolean
+  hasVideoSolution: Boolean
+}
+
+"""[SOURCED] Opaque — see KNOWN GAPS. Passing `{}` is required, not optional."""
+input QuestionListFilterInput {
+  _unknown: Boolean # placeholder — no field name on this input is confirmed
+}
+
+"""[VERIFIED]"""
+type QuestionListResponse {
+  totalNum: Int
+  data: [Question]
+}
+
+"""[SOURCED]"""
+type DailyCodingChallengeQuestion {
+  date: String
+  link: String
+  question: Question
+}
+
+"""[SOURCED]"""
+type TagEdge {
+  node: TopicTagNode
+}
+
+"""[SOURCED]"""
+type TopicTagNode {
+  name: String
+  slug: String
+}
+
+"""[SOURCED]"""
+type QuestionTagConnection {
+  edges: [TagEdge]
+}
+
+# ============================================================
+# Contest Domain
+# ============================================================
+
+"""[SOURCED]"""
+type Contest {
+  title: String
+  titleSlug: String
+  startTime: Int
+  duration: Int
+  originStartTime: Int
+  isVirtual: Boolean
+  containsPremium: Boolean
+}
+
+"""[SOURCED]"""
+type ContestRankingBadge {
+  name: String
+}
+
+"""[SOURCED]"""
+type UserContestRanking {
+  attendedContestsCount: Int
+  rating: Float
+  globalRanking: Int
+  totalParticipants: Int
+  topPercentage: Float
+  badge: ContestRankingBadge
+}
+
+"""[SOURCED]"""
+type ContestSummary {
+  title: String
+  startTime: Int
+}
+
+"""[SOURCED]"""
+type UserContestRankingHistoryEntry {
+  attended: Boolean
+  rating: Float
+  ranking: Int
+  trendDirection: String
+  problemsSolved: Int
+  totalProblems: Int
+  finishTimeInSeconds: Int
+  contest: ContestSummary
+}
+
+# ============================================================
+# Discussion Domain
+# ============================================================
+
+"""[SOURCED]"""
+type ScoreNode {
+  id: String
+  score: Int
+  description: String
+  date: String
+}
+
+"""[SOURCED]"""
+type DiscussAuthorProfile {
+  userAvatar: String
+  reputation: Int
+}
+
+"""[SOURCED]"""
+type DiscussActiveBadge {
+  displayName: String
+  icon: String
+}
+
+"""[SOURCED]"""
+type DiscussAuthor {
+  isDiscussAdmin: Boolean
+  isDiscussStaff: Boolean
+  username: String
+  nameColor: String
+  activeBadge: DiscussActiveBadge
+  profile: DiscussAuthorProfile
+  isActive: Boolean
+}
+
+"""[SOURCED] Corresponds to the `DiscussPost` fragment shared by topic/comment operations."""
+type PostNode {
+  id: String
+  voteCount: Int
+  voteStatus: String
+  content: String
+  updationDate: Int
+  creationDate: Int
+  status: String
+  isHidden: Boolean
+  coinRewards: [ScoreNode]
+  author: DiscussAuthor
+  authorIsModerator: Boolean
+  isOwnPost: Boolean
+}
+
+"""[SOURCED]"""
+type PinnedBy {
+  username: String
+}
+
+"""[SOURCED]"""
+type CommentNode {
+  id: String
+  pinned: Boolean
+  pinnedBy: PinnedBy
+  post: PostNode
+  numChildren: Int
+}
+
+"""[SOURCED]"""
+type TopicCommentsConnection {
+  data: [CommentNode]
+}
+
+"""[SOURCED]"""
+type DiscussTopic {
+  id: String
+  viewCount: Int
+  topLevelCommentCount: Int
+  subscribed: Boolean
+  title: String
+  pinned: Boolean
+  tags: [String]
+  hideFromTrending: Boolean
+  post: PostNode
+}
+
+"""[SOURCED]"""
+type TrendingTopicAuthorProfile {
+  userAvatar: String
+}
+
+"""[SOURCED]"""
+type TrendingTopicAuthor {
+  username: String
+  isActive: Boolean
+  profile: TrendingTopicAuthorProfile
+}
+
+"""[SOURCED]"""
+type TrendingTopicPost {
+  id: String
+  creationDate: Int
+  contentPreview: String
+  author: TrendingTopicAuthor
+}
+
+"""[SOURCED]"""
+type TrendingTopic {
+  id: String
+  title: String
+  post: TrendingTopicPost
+}
+
+# ============================================================
+# Root Query
+# ============================================================
+
+"""
+Every field below is [VERIFIED or SOURCED] per its own note. Argument
+requiredness (`!`) is taken directly from the operation strings that
+declared them (e.g. `$username: String!`) — this part is a hard fact, not
+an inference, since the operations themselves fail schema validation
+otherwise.
+"""
+type Query {
+  # --- User domain ---
+  """[VERIFIED] Returns null (with error "That user does not exist.") for unknown usernames."""
+  matchedUser(username: String!): MatchedUser
+  """[SOURCED]"""
+  allQuestionsCount: [QuestionCount]
+  """[VERIFIED]"""
+  recentSubmissionList(username: String!, limit: Int): [Submission]
+  """[VERIFIED]"""
+  recentAcSubmissionList(username: String!, limit: Int): [Submission]
+  """[VERIFIED]"""
+  userProfileUserQuestionProgressV2(userSlug: String!): UserQuestionProgress
+
+  # --- Problem domain ---
+  """[VERIFIED]"""
+  question(titleSlug: String!): Question
+  """
+  [VERIFIED] `filters` must be passed explicitly (`{}` if unused) — omitting
+  it entirely throws "missing 1 required positional argument: 'filters'"
+  despite the argument being nullable in the operation signature.
+  """
+  questionList(
+    categorySlug: String
+    limit: Int
+    skip: Int
+    filters: QuestionListFilterInput
+  ): QuestionListResponse
+  """[SOURCED]"""
+  activeDailyCodingChallengeQuestion: DailyCodingChallengeQuestion
+  """[SOURCED]"""
+  questionTopicTags: QuestionTagConnection
+
+  # --- Contest domain ---
+  """[SOURCED]"""
+  allContests: [Contest]
+  """[SOURCED]"""
+  userContestRanking(username: String!): UserContestRanking
+  """[SOURCED]"""
+  userContestRankingHistory(username: String!): [UserContestRankingHistoryEntry]
+
+  # --- Discussion domain ---
+  """[SOURCED]"""
+  topic(id: Int!): DiscussTopic
+  """[SOURCED] `orderBy`/`pageNo`/`numPerPage` have server-side defaults."""
+  topicComments(
+    topicId: Int!
+    orderBy: String = "newest_to_oldest"
+    pageNo: Int = 1
+    numPerPage: Int = 10
+  ): TopicCommentsConnection
+  """[SOURCED]"""
+  cachedTrendingCategoryTopics(first: Int!): [TrendingTopic]
+}
+
+# NOTE: No `schema { query: Query }` block or `mutation`/`subscription` root
+# is declared — see KNOWN GAPS. This file documents Query only.
